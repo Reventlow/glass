@@ -6,6 +6,9 @@
 use serde::Deserialize;
 
 /// A technician who can be assigned to handle requests.
+///
+/// Note: The SDP API returns many fields as nested objects.
+/// We only capture the essential fields needed for display and assignment.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Technician {
     /// Unique technician ID.
@@ -35,21 +38,21 @@ pub struct Technician {
     #[serde(default)]
     pub mobile: Option<String>,
 
-    /// Job title.
-    #[serde(default)]
+    /// Job title (SDP returns this as "jobtitle").
+    #[serde(default, alias = "jobtitle")]
     pub job_title: Option<String>,
 
-    /// Department name.
+    /// Department (can be a nested object with id/name).
     #[serde(default)]
-    pub department: Option<String>,
+    pub department: Option<serde_json::Value>,
 
     /// Whether the technician is currently active.
     #[serde(default)]
     pub is_active: Option<bool>,
 
-    /// Associated site/location.
+    /// Associated site/location (can be a nested object).
     #[serde(default)]
-    pub site: Option<super::NamedEntity>,
+    pub site: Option<serde_json::Value>,
 }
 
 impl Technician {
@@ -73,6 +76,10 @@ pub struct ListTechniciansResponse {
     /// List of technicians.
     #[serde(default)]
     pub technicians: Vec<Technician>,
+
+    /// Pagination info (if requested).
+    #[serde(default)]
+    pub list_info: Option<serde_json::Value>,
 }
 
 #[cfg(test)]

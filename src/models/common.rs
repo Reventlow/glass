@@ -205,14 +205,53 @@ impl ResponseStatus {
 /// SDP API responses follow a consistent envelope pattern with
 /// `response_status` and the actual data in a field matching the
 /// resource type.
+///
+/// Note: The SDP API returns `response_status` as an array with a single element.
 #[derive(Debug, Clone, Deserialize)]
 pub struct SdpResponse<T> {
     /// Response status indicating success or failure.
+    /// SDP returns this as a single-element array.
+    #[serde(deserialize_with = "deserialize_response_status")]
     pub response_status: ResponseStatus,
 
     /// The actual response data (when successful).
     #[serde(flatten)]
     pub data: T,
+}
+
+/// Deserializes response_status which can be either an array or a single object.
+fn deserialize_response_status<'de, D>(deserializer: D) -> Result<ResponseStatus, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::{self, SeqAccess, Visitor};
+
+    struct ResponseStatusVisitor;
+
+    impl<'de> Visitor<'de> for ResponseStatusVisitor {
+        type Value = ResponseStatus;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a response status object or array containing one")
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+        where
+            A: SeqAccess<'de>,
+        {
+            seq.next_element()?
+                .ok_or_else(|| de::Error::custom("response_status array is empty"))
+        }
+
+        fn visit_map<M>(self, map: M) -> Result<Self::Value, M::Error>
+        where
+            M: serde::de::MapAccess<'de>,
+        {
+            Deserialize::deserialize(de::value::MapAccessDeserializer::new(map))
+        }
+    }
+
+    deserializer.deserialize_any(ResponseStatusVisitor)
 }
 
 impl<T> SdpResponse<T> {
