@@ -21,7 +21,7 @@ fn trim_option(s: &Option<String>) -> Option<String> {
 /// All fields are optional - use them to filter the results.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub struct ListRequestsInput {
-    /// Filter by ticket status (e.g., "Open", "In Progress", "Closed", "Resolved").
+    /// Filter by ticket status (e.g., "Åben", "Tildelt", "I gang", "Lukket").
     #[serde(default)]
     pub status: Option<String>,
 
@@ -29,13 +29,17 @@ pub struct ListRequestsInput {
     #[serde(default)]
     pub priority: Option<String>,
 
-    /// Filter by assigned technician ID.
+    /// Filter by assigned technician name (e.g., "Gorm Reventlow").
     #[serde(default)]
-    pub technician_id: Option<String>,
+    pub technician: Option<String>,
 
-    /// Filter by requester's email address.
+    /// Filter by requester name (e.g., "Henriette Meissner").
     #[serde(default)]
-    pub requester_email: Option<String>,
+    pub requester: Option<String>,
+
+    /// If true, only return open tickets (excludes Lukket, Annulleret, Udført statuses).
+    #[serde(default)]
+    pub open_only: Option<bool>,
 
     /// Filter tickets created after this date (ISO 8601 format: YYYY-MM-DD).
     #[serde(default)]
@@ -61,8 +65,9 @@ impl ListRequestsInput {
         Self {
             status: trim_option(&self.status),
             priority: trim_option(&self.priority),
-            technician_id: trim_option(&self.technician_id),
-            requester_email: trim_option(&self.requester_email),
+            technician: trim_option(&self.technician),
+            requester: trim_option(&self.requester),
+            open_only: self.open_only,
             created_after: trim_option(&self.created_after),
             created_before: trim_option(&self.created_before),
             limit: self.limit,
@@ -372,19 +377,21 @@ mod tests {
     #[test]
     fn test_list_requests_input_sanitize() {
         let input = ListRequestsInput {
-            status: Some("  Open  ".to_string()),
+            status: Some("  Åben  ".to_string()),
             priority: Some("".to_string()),
-            technician_id: Some("  123  ".to_string()),
-            requester_email: None,
+            technician: Some("  Gorm Reventlow  ".to_string()),
+            requester: None,
+            open_only: Some(true),
             created_after: None,
             created_before: None,
             limit: Some(10),
             offset: None,
         };
         let sanitized = input.sanitize();
-        assert_eq!(sanitized.status, Some("Open".to_string()));
+        assert_eq!(sanitized.status, Some("Åben".to_string()));
         assert_eq!(sanitized.priority, None); // Empty string becomes None
-        assert_eq!(sanitized.technician_id, Some("123".to_string()));
+        assert_eq!(sanitized.technician, Some("Gorm Reventlow".to_string()));
+        assert_eq!(sanitized.open_only, Some(true));
         assert_eq!(sanitized.limit, Some(10));
     }
 

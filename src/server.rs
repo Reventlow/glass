@@ -57,7 +57,7 @@ impl GlassServer {
     ///
     /// Can filter by status, priority, technician, requester, or date range.
     /// Returns paginated results.
-    #[tool(description = "List service desk tickets. Can filter by status, priority, technician, or date range. Returns paginated results with ticket ID, subject, status, and assignee.")]
+    #[tool(description = "List service desk tickets. Can filter by status, priority, technician name, or requester name. Use open_only=true to exclude closed tickets. Returns paginated results with ticket ID, subject, status, and assignee.")]
     async fn list_requests(
         &self,
         Parameters(input): Parameters<ListRequestsInput>,
@@ -69,33 +69,30 @@ impl GlassServer {
         // Build ListParams from input
         let mut params = ListParams::new();
 
-        // Apply filters
-        if let Some(status) = input.status {
+        // SDP API only supports one search criterion at a time
+        // Priority: technician > requester > status > priority
+        if let Some(ref technician) = input.technician {
+            params = params.with_technician(technician);
+        } else if let Some(ref requester) = input.requester {
+            params = params.with_requester(requester);
+        } else if let Some(ref status) = input.status {
             params = params.with_status(status);
-        }
-        if let Some(priority) = input.priority {
+        } else if let Some(ref priority) = input.priority {
             params = params.with_priority(priority);
         }
-        if let Some(technician) = input.technician_id {
-            params = params.with_technician(technician);
-        }
-        if let Some(requester) = input.requester_email {
-            params = params.with_requester(requester);
-        }
 
-        // Apply pagination
-        let limit = input.limit.unwrap_or(20).min(100);
-        params = params.with_limit(limit);
+        // Request more if we need to filter client-side
+        let open_only = input.open_only == Some(true);
+        let requested_limit = input.limit.unwrap_or(20).min(100);
+        let fetch_limit = if open_only { 100 } else { requested_limit };
+        params = params.with_limit(fetch_limit);
 
         if let Some(offset) = input.offset {
             params = params.with_offset(offset);
         }
 
-        // Note: created_after/created_before would need additional SDP-specific
-        // date filtering logic that we can add in a future iteration
-
         // Execute the request
-        let requests = self
+        let mut requests = self
             .sdp_client
             .list_requests(params)
             .await
@@ -104,6 +101,17 @@ impl GlassServer {
                 tracing::error!(error = %sanitized, "Failed to list requests");
                 format!("Failed to list requests: {}", sanitized)
             })?;
+
+        // Client-side filtering for open_only
+        if open_only {
+            let closed_statuses = ["Lukket", "Annulleret", "Udført, afventer godkendelse"];
+            requests.retain(|r| {
+                let status = r.display_status();
+                !closed_statuses.iter().any(|&s| status == s)
+            });
+            // Apply the original limit after filtering
+            requests.truncate(requested_limit as usize);
+        }
 
         // Format the response
         Ok(format_request_list(&requests))
@@ -131,8 +139,18 @@ impl GlassServer {
                 format!("Failed to get request {}: {}", input.request_id, sanitized)
             })?;
 
+        // Fetch notes for this request
+        let notes = self
+            .sdp_client
+            .list_notes(&input.request_id)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!(error = %self.sanitize_error(&e), request_id = %input.request_id, "Failed to fetch notes");
+                vec![]
+            });
+
         // Format the response
-        Ok(format_request_details(&request))
+        Ok(format_request_details(&request, &notes))
     }
 
     /// List technicians available for ticket assignment.
@@ -425,7 +443,7 @@ fn format_request_list(requests: &[RequestSummary]) -> String {
 }
 
 /// Formats full request details as human-readable text.
-fn format_request_details(request: &Request) -> String {
+fn format_request_details(request: &Request, notes: &[Note]) -> String {
     let mut output = String::new();
 
     // Header
@@ -484,6 +502,31 @@ fn format_request_details(request: &Request) -> String {
         output.push_str("\n--- Description ---\n");
         output.push_str(&truncate_text(description, MAX_DESCRIPTION_LENGTH));
         output.push('\n');
+    }
+
+    // Notes section
+    if !notes.is_empty() {
+        output.push_str("\n--- Notes ---\n");
+        for note in notes {
+            // Note header with author and timestamp
+            let author = note.display_created_by();
+            let timestamp = note
+                .created_time
+                .as_ref()
+                .and_then(|t| t.display())
+                .unwrap_or("Unknown time");
+            let visibility = if note.show_to_requester == Some(true) {
+                ""
+            } else {
+                " [Internal]"
+            };
+            output.push_str(&format!("\n[{}] {}{}\n", timestamp, author, visibility));
+
+            // Note content (truncated if needed)
+            let content = note.display_content();
+            output.push_str(&truncate_text(content, 1000));
+            output.push('\n');
+        }
     }
 
     // Resolution (if present, truncated if too long)

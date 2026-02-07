@@ -304,6 +304,14 @@ pub struct GetRequestResponse {
     pub request: super::Request,
 }
 
+/// Response wrapper for list notes operations.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ListNotesResponse {
+    /// List of notes.
+    #[serde(default)]
+    pub notes: Vec<super::Note>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

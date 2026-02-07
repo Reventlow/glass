@@ -24,9 +24,9 @@ use reqwest::{Client, Method, StatusCode};
 use crate::config::Config;
 use crate::error::GlassError;
 use crate::models::{
-    AddNoteResponse, CreateNoteRequest, GetRequestResponse, ListInfo, ListRequestsResponse,
-    ListTechniciansResponse, Note, Request, RequestSummary, SearchCriteria, SdpResponse,
-    Technician,
+    AddNoteResponse, CreateNoteRequest, GetRequestResponse, ListInfo, ListNotesResponse,
+    ListRequestsResponse, ListTechniciansResponse, Note, Request, RequestSummary, SearchCriteria,
+    SdpResponse, Technician,
 };
 use crate::tools::{CreateRequestInput, UpdateRequestInput};
 
@@ -452,6 +452,44 @@ impl SdpClient {
         Ok(response.request)
     }
 
+    /// Gets notes for a request.
+    ///
+    /// # Arguments
+    ///
+    /// * `request_id` - The unique request ID
+    ///
+    /// # Returns
+    ///
+    /// A vector of notes attached to the request.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let notes = client.list_notes("12345").await?;
+    /// for note in notes {
+    ///     println!("{}: {}", note.display_created_by(), note.display_content());
+    /// }
+    /// ```
+    pub async fn list_notes(&self, request_id: &str) -> Result<Vec<Note>, GlassError> {
+        let path = format!("/requests/{}/notes", request_id);
+
+        let response: ListNotesResponse = self
+            .get(&path, None)
+            .await
+            .map_err(|e| {
+                // Convert generic NotFound to one with the specific ID
+                if matches!(e, GlassError::NotFound { .. }) {
+                    GlassError::NotFound {
+                        id: request_id.to_string(),
+                    }
+                } else {
+                    e
+                }
+            })?;
+
+        Ok(response.notes)
+    }
+
     /// Lists technicians with optional filtering.
     ///
     /// # Arguments
@@ -827,16 +865,9 @@ impl ListParams {
         self
     }
 
-    /// Filters by status name (e.g., "Open", "Closed").
+    /// Filters by status name (e.g., "Åben", "Lukket").
     pub fn with_status(mut self, status: impl Into<String>) -> Self {
         use crate::models::SearchCriterion;
-
-        // Add AND operator to previous criterion if exists
-        if let Some(last) = self.search_criteria.criteria.last_mut() {
-            if last.logical_operator.is_none() {
-                last.logical_operator = Some("AND".to_string());
-            }
-        }
 
         self.search_criteria
             .criteria
@@ -844,15 +875,39 @@ impl ListParams {
         self
     }
 
+    /// Filters to exclude closed/completed statuses.
+    /// Excludes: Lukket, Annulleret, Udført (afventer godkendelse)
+    pub fn with_open_only(mut self) -> Self {
+        use crate::models::SearchCriterion;
+
+        // Use "is not" condition to exclude closed statuses
+        self.search_criteria.criteria.push(SearchCriterion {
+            field: "status.name".to_string(),
+            condition: "is not".to_string(),
+            value: serde_json::Value::String("Lukket".to_string()),
+            logical_operator: None,
+        });
+
+        self.search_criteria.criteria.push(SearchCriterion {
+            field: "status.name".to_string(),
+            condition: "is not".to_string(),
+            value: serde_json::Value::String("Annulleret".to_string()),
+            logical_operator: None,
+        });
+
+        self.search_criteria.criteria.push(SearchCriterion {
+            field: "status.name".to_string(),
+            condition: "is not".to_string(),
+            value: serde_json::Value::String("Udført, afventer godkendelse".to_string()),
+            logical_operator: None,
+        });
+
+        self
+    }
+
     /// Filters by priority name (e.g., "High", "Low").
     pub fn with_priority(mut self, priority: impl Into<String>) -> Self {
         use crate::models::SearchCriterion;
-
-        if let Some(last) = self.search_criteria.criteria.last_mut() {
-            if last.logical_operator.is_none() {
-                last.logical_operator = Some("AND".to_string());
-            }
-        }
 
         self.search_criteria
             .criteria
@@ -864,12 +919,6 @@ impl ListParams {
     pub fn with_technician(mut self, technician: impl Into<String>) -> Self {
         use crate::models::SearchCriterion;
 
-        if let Some(last) = self.search_criteria.criteria.last_mut() {
-            if last.logical_operator.is_none() {
-                last.logical_operator = Some("AND".to_string());
-            }
-        }
-
         self.search_criteria
             .criteria
             .push(SearchCriterion::is("technician.name", technician));
@@ -880,12 +929,6 @@ impl ListParams {
     pub fn with_requester(mut self, requester: impl Into<String>) -> Self {
         use crate::models::SearchCriterion;
 
-        if let Some(last) = self.search_criteria.criteria.last_mut() {
-            if last.logical_operator.is_none() {
-                last.logical_operator = Some("AND".to_string());
-            }
-        }
-
         self.search_criteria
             .criteria
             .push(SearchCriterion::is("requester.name", requester));
@@ -895,12 +938,6 @@ impl ListParams {
     /// Searches by subject (partial match).
     pub fn with_subject_contains(mut self, subject: impl Into<String>) -> Self {
         use crate::models::SearchCriterion;
-
-        if let Some(last) = self.search_criteria.criteria.last_mut() {
-            if last.logical_operator.is_none() {
-                last.logical_operator = Some("AND".to_string());
-            }
-        }
 
         self.search_criteria
             .criteria
@@ -918,21 +955,22 @@ impl ListParams {
     fn to_input_data(&self) -> serde_json::Value {
         let mut data = serde_json::Map::new();
 
-        // Always include list_info, even if defaults
-        let list_info = serde_json::to_value(&self.list_info)
+        // Build list_info object
+        let mut list_info = serde_json::to_value(&self.list_info)
             .unwrap_or_else(|_| serde_json::json!({}));
-        data.insert("list_info".to_string(), list_info);
 
-        // Only include search_criteria if there are criteria
+        // SDP expects search_criteria INSIDE list_info
         if !self.search_criteria.is_empty() {
-            // SDP expects criteria directly, not wrapped
-            data.insert(
-                "search_criteria".to_string(),
-                serde_json::to_value(&self.search_criteria.criteria)
-                    .unwrap_or_else(|_| serde_json::json!([])),
-            );
+            if let serde_json::Value::Object(ref mut map) = list_info {
+                map.insert(
+                    "search_criteria".to_string(),
+                    serde_json::to_value(&self.search_criteria.criteria)
+                        .unwrap_or_else(|_| serde_json::json!([])),
+                );
+            }
         }
 
+        data.insert("list_info".to_string(), list_info);
         serde_json::Value::Object(data)
     }
 }
@@ -988,7 +1026,9 @@ mod tests {
         let params = ListParams::new().with_status("Open");
         let input_data = params.to_input_data();
 
-        let criteria = input_data.get("search_criteria").unwrap();
+        // search_criteria should be inside list_info
+        let list_info = input_data.get("list_info").unwrap();
+        let criteria = list_info.get("search_criteria").unwrap();
         assert!(criteria.is_array());
         let first = criteria.as_array().unwrap().first().unwrap();
         assert_eq!(first.get("field").unwrap(), "status.name");
@@ -1002,11 +1042,14 @@ mod tests {
             .with_priority("High");
         let input_data = params.to_input_data();
 
-        let criteria = input_data.get("search_criteria").unwrap();
+        // search_criteria should be inside list_info
+        let list_info = input_data.get("list_info").unwrap();
+        let criteria = list_info.get("search_criteria").unwrap();
         let arr = criteria.as_array().unwrap();
         assert_eq!(arr.len(), 2);
 
-        // First criterion should have AND operator
-        assert_eq!(arr[0].get("logical_operator").unwrap(), "AND");
+        // Both criteria should be present
+        assert_eq!(arr[0].get("field").unwrap(), "status.name");
+        assert_eq!(arr[1].get("field").unwrap(), "priority.name");
     }
 }
