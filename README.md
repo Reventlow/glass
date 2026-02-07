@@ -21,16 +21,12 @@ Glass exposes ServiceDesk Plus operations as [Model Context Protocol (MCP)](http
 ### From source
 
 ```bash
-git clone https://github.com/your-org/glass.git
+git clone https://github.com/Reventlow/glass.git
 cd glass
 cargo build --release
 ```
 
 The binary will be at `target/release/glass`.
-
-### Pre-built binaries
-
-Pre-built binaries for Linux and macOS are available on the [Releases](https://github.com/your-org/glass/releases) page.
 
 ## Configuration
 
