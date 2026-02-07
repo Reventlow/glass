@@ -85,13 +85,7 @@ impl Config {
     /// Validates the API key is not a placeholder value.
     fn validate_api_key(key: &str) -> Result<(), GlassError> {
         let key_lower = key.to_lowercase();
-        let placeholder_patterns = [
-            "your_api_key",
-            "your_key",
-            "placeholder",
-            "xxx",
-            "changeme",
-        ];
+        let placeholder_patterns = ["your_api_key", "your_key", "placeholder", "xxx", "changeme"];
 
         for pattern in placeholder_patterns {
             if key_lower.contains(pattern) {

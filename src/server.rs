@@ -47,7 +47,9 @@ impl GlassServer {
     /// that the MCP server is properly initialized.
     ///
     /// Returns "pong" on success.
-    #[tool(description = "Test connectivity to the Glass MCP server. Returns 'pong' if the server is running correctly.")]
+    #[tool(
+        description = "Test connectivity to the Glass MCP server. Returns 'pong' if the server is running correctly."
+    )]
     fn ping(&self) -> String {
         tracing::debug!("ping tool called");
         "pong".to_string()
@@ -57,7 +59,9 @@ impl GlassServer {
     ///
     /// Can filter by status, priority, technician, requester, or date range.
     /// Returns paginated results.
-    #[tool(description = "List service desk tickets. Can filter by status, priority, technician name, or requester name. Use open_only=true to exclude closed tickets. Returns paginated results with ticket ID, subject, status, and assignee.")]
+    #[tool(
+        description = "List service desk tickets. Can filter by status, priority, technician name, or requester name. Use open_only=true to exclude closed tickets. Returns paginated results with ticket ID, subject, status, and assignee."
+    )]
     async fn list_requests(
         &self,
         Parameters(input): Parameters<ListRequestsInput>,
@@ -66,52 +70,46 @@ impl GlassServer {
         let input = input.sanitize();
         tracing::debug!(?input, "list_requests tool called");
 
-        // Build ListParams from input
+        // Build ListParams from input - all filters are applied as search criteria
         let mut params = ListParams::new();
 
-        // SDP API only supports one search criterion at a time
-        // Priority: technician > requester > status > priority
         if let Some(ref technician) = input.technician {
             params = params.with_technician(technician);
-        } else if let Some(ref requester) = input.requester {
+        }
+        if let Some(ref requester) = input.requester {
             params = params.with_requester(requester);
-        } else if let Some(ref status) = input.status {
+        }
+        if let Some(ref status) = input.status {
             params = params.with_status(status);
-        } else if let Some(ref priority) = input.priority {
+        }
+        if let Some(ref priority) = input.priority {
             params = params.with_priority(priority);
         }
+        if let Some(ref created_after) = input.created_after {
+            params = params.with_created_after(created_after);
+        }
+        if let Some(ref created_before) = input.created_before {
+            params = params.with_created_before(created_before);
+        }
 
-        // Request more if we need to filter client-side
-        let open_only = input.open_only == Some(true);
+        // Use server-side filtering for open_only
+        if input.open_only == Some(true) {
+            params = params.with_open_only();
+        }
+
         let requested_limit = input.limit.unwrap_or(20).min(100);
-        let fetch_limit = if open_only { 100 } else { requested_limit };
-        params = params.with_limit(fetch_limit);
+        params = params.with_limit(requested_limit);
 
         if let Some(offset) = input.offset {
             params = params.with_offset(offset);
         }
 
         // Execute the request
-        let mut requests = self
-            .sdp_client
-            .list_requests(params)
-            .await
-            .map_err(|e| {
-                let sanitized = self.sanitize_error(&e);
-                tracing::error!(error = %sanitized, "Failed to list requests");
-                format!("Failed to list requests: {}", sanitized)
-            })?;
-
-        // Client-side filtering for open_only
-        if open_only {
-            let closed_statuses = ["Lukket", "Annulleret", "Udført, afventer godkendelse"];
-            requests.retain(|r| {
-                let status = r.display_status();
-                !closed_statuses.iter().any(|&s| status == s)
-            });
-            // Apply the original limit after filtering
-            requests.truncate(requested_limit as usize);
-        }
+        let requests = self.sdp_client.list_requests(params).await.map_err(|e| {
+            let sanitized = self.sanitize_error(&e);
+            tracing::error!(error = %sanitized, "Failed to list requests");
+            format!("Failed to list requests: {}", sanitized)
+        })?;
 
         // Format the response
         Ok(format_request_list(&requests))
@@ -120,7 +118,9 @@ impl GlassServer {
     /// Get full details of a single service desk ticket.
     ///
     /// Returns complete information including description, notes, conversations, and history.
-    #[tool(description = "Get full details of a single service desk ticket including description, notes, and history.")]
+    #[tool(
+        description = "Get full details of a single service desk ticket including description, notes, and history."
+    )]
     async fn get_request(
         &self,
         Parameters(input): Parameters<GetRequestInput>,
@@ -140,7 +140,11 @@ impl GlassServer {
             })?;
 
         // Fetch notes for this request, including content from content_url
-        let (notes, notes_error) = match self.sdp_client.list_notes_with_content(&input.request_id).await {
+        let (notes, notes_error) = match self
+            .sdp_client
+            .list_notes_with_content(&input.request_id)
+            .await
+        {
             Ok(n) => (n, None),
             Err(e) => {
                 let err_msg = self.sanitize_error(&e);
@@ -150,7 +154,11 @@ impl GlassServer {
         };
 
         // Fetch conversations (email replies) for this request, including content
-        let (conversations, conv_error) = match self.sdp_client.list_conversations_with_content(&input.request_id).await {
+        let (conversations, conv_error) = match self
+            .sdp_client
+            .list_conversations_with_content(&input.request_id)
+            .await
+        {
             Ok(c) => (c, None),
             Err(e) => {
                 let err_msg = self.sanitize_error(&e);
@@ -166,13 +174,21 @@ impl GlassServer {
         let web_url = self.sdp_client.request_web_url(&input.request_id);
 
         // Format the response
-        Ok(format_request_details(&request, &notes, &conversations, &web_url, &fetch_errors))
+        Ok(format_request_details(
+            &request,
+            &notes,
+            &conversations,
+            &web_url,
+            &fetch_errors,
+        ))
     }
 
     /// List technicians available for ticket assignment.
     ///
     /// Returns IDs and names so you can assign tickets to specific technicians.
-    #[tool(description = "List all technicians available for ticket assignment. Returns IDs and names. Use the ID when assigning tickets.")]
+    #[tool(
+        description = "List all technicians available for ticket assignment. Returns IDs and names. Use the ID when assigning tickets."
+    )]
     async fn list_technicians(
         &self,
         Parameters(input): Parameters<ListTechniciansInput>,
@@ -202,7 +218,9 @@ impl GlassServer {
     /// Create a new service desk ticket.
     ///
     /// Subject is required. Returns the created ticket with its assigned ID.
-    #[tool(description = "Create a new service desk ticket. Subject is required. Returns the created ticket with its assigned ID.")]
+    #[tool(
+        description = "Create a new service desk ticket. Subject is required. Returns the created ticket with its assigned ID."
+    )]
     async fn create_request(
         &self,
         Parameters(input): Parameters<CreateRequestInput>,
@@ -222,15 +240,11 @@ impl GlassServer {
             ));
         }
 
-        let request = self
-            .sdp_client
-            .create_request(&input)
-            .await
-            .map_err(|e| {
-                let sanitized = self.sanitize_error(&e);
-                tracing::error!(error = %sanitized, "Failed to create request");
-                format!("Failed to create request: {}", sanitized)
-            })?;
+        let request = self.sdp_client.create_request(&input).await.map_err(|e| {
+            let sanitized = self.sanitize_error(&e);
+            tracing::error!(error = %sanitized, "Failed to create request");
+            format!("Failed to create request: {}", sanitized)
+        })?;
 
         Ok(format_create_result(&request))
     }
@@ -238,7 +252,9 @@ impl GlassServer {
     /// Update an existing ticket's properties.
     ///
     /// Request ID is required. At least one field must be provided for update.
-    #[tool(description = "Update an existing ticket's properties such as priority, status, category, or assignment. Request ID is required.")]
+    #[tool(
+        description = "Update an existing ticket's properties such as priority, status, category, or assignment. Request ID is required."
+    )]
     async fn update_request(
         &self,
         Parameters(input): Parameters<UpdateRequestInput>,
@@ -283,7 +299,9 @@ impl GlassServer {
     /// Close a ticket with closure reason and comments.
     ///
     /// Request ID is required. Closure code and comments are optional.
-    #[tool(description = "Close a ticket with closure reason and comments. Request ID is required.")]
+    #[tool(
+        description = "Close a ticket with closure reason and comments. Request ID is required."
+    )]
     async fn close_request(
         &self,
         Parameters(input): Parameters<CloseRequestInput>,
@@ -312,7 +330,9 @@ impl GlassServer {
     /// Add a note to a ticket.
     ///
     /// Notes can be internal or visible to requester.
-    #[tool(description = "Add a note to a ticket. Notes can be internal (technicians only) or visible to the requester. Request ID and content are required.")]
+    #[tool(
+        description = "Add a note to a ticket. Notes can be internal (technicians only) or visible to the requester. Request ID and content are required."
+    )]
     async fn add_note(
         &self,
         Parameters(input): Parameters<AddNoteInput>,
@@ -347,7 +367,9 @@ impl GlassServer {
     /// Assign a ticket to a technician or support group.
     ///
     /// At least one of technician_id or group must be provided.
-    #[tool(description = "Assign a ticket to a technician or support group. At least one of technician_id or group must be provided.")]
+    #[tool(
+        description = "Assign a ticket to a technician or support group. At least one of technician_id or group must be provided."
+    )]
     async fn assign_request(
         &self,
         Parameters(input): Parameters<AssignRequestInput>,
@@ -421,11 +443,14 @@ fn truncate_text(text: &str, max_length: usize) -> String {
     if text.len() <= max_length {
         text.to_string()
     } else {
-        // Find a good break point (word boundary if possible)
-        let mut end = max_length - 15; // Leave room for "... [truncated]"
-        if let Some(space_pos) = text[..end].rfind(char::is_whitespace) {
-            end = space_pos;
-        }
+        // Leave room for "... [truncated]" suffix
+        let target = max_length.saturating_sub(15);
+        // Find a valid UTF-8 boundary at or before target
+        let safe_end = text.floor_char_boundary(target);
+        // Try to break at a word boundary for cleaner output
+        let end = text[..safe_end]
+            .rfind(char::is_whitespace)
+            .unwrap_or(safe_end);
         format!("{}... [truncated]", &text[..end])
     }
 }
@@ -459,7 +484,13 @@ fn format_request_list(requests: &[RequestSummary]) -> String {
 }
 
 /// Formats full request details as human-readable text.
-fn format_request_details(request: &Request, notes: &[Note], conversations: &[Conversation], web_url: &str, fetch_errors: &[String]) -> String {
+fn format_request_details(
+    request: &Request,
+    notes: &[Note],
+    conversations: &[Conversation],
+    web_url: &str,
+    fetch_errors: &[String],
+) -> String {
     let mut output = String::new();
 
     // Header
@@ -698,7 +729,10 @@ fn format_update_result(request: &Request) -> String {
     output.push_str("Current state:\n");
     output.push_str(&format!("  Status: {}\n", request.display_status()));
     output.push_str(&format!("  Priority: {}\n", request.display_priority()));
-    output.push_str(&format!("  Assigned to: {}\n", request.display_technician()));
+    output.push_str(&format!(
+        "  Assigned to: {}\n",
+        request.display_technician()
+    ));
 
     if let Some(group) = request.display_group() {
         output.push_str(&format!("  Group: {}\n", group));
@@ -785,10 +819,7 @@ fn format_assign_result(request: &Request, input: &AssignRequestInput) -> String
     ));
 
     if input.technician_id.is_some() {
-        output.push_str(&format!(
-            "Technician: {}\n",
-            request.display_technician()
-        ));
+        output.push_str(&format!("Technician: {}\n", request.display_technician()));
     }
 
     if input.group.is_some() {
@@ -843,6 +874,16 @@ mod tests {
         assert!(result.ends_with("... [truncated]"));
         // Should break at a word boundary, not in the middle of a word
         assert!(!result.contains("sente... [truncated]"));
+    }
+
+    #[test]
+    fn test_truncate_text_multibyte_utf8() {
+        // Danish characters (multi-byte) should not cause a panic
+        let text = "Ædansen gik over æblegrøden og blåbærkagen var også meget lækker i dag";
+        let result = truncate_text(text, 30);
+        assert!(result.ends_with("... [truncated]"));
+        // Verify the result is valid UTF-8 (this would panic if not)
+        assert!(result.len() <= 50); // 30 + room for suffix
     }
 
     fn test_config() -> Config {

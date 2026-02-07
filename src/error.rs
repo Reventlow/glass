@@ -118,7 +118,10 @@ pub enum GlassError {
 impl GlassError {
     /// Creates a configuration error for a missing environment variable.
     pub fn missing_env(var_name: &str) -> Self {
-        GlassError::Config(format!("missing required environment variable: {}", var_name))
+        GlassError::Config(format!(
+            "missing required environment variable: {}",
+            var_name
+        ))
     }
 
     /// Creates a configuration error for an invalid value.
@@ -178,8 +181,7 @@ impl GlassError {
             }
             GlassError::HttpStatus { status, .. } => {
                 // 429 (rate limit) and 5xx server errors are retryable
-                status.as_u16() == 429
-                    || status.is_server_error()
+                status.as_u16() == 429 || status.is_server_error()
             }
             _ => false,
         }

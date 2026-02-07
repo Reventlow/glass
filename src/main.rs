@@ -50,8 +50,7 @@ async fn main() -> Result<()> {
     tracing::debug!("Configuration loaded, base_url: {}", config.base_url);
 
     // Create the SDP client
-    let sdp_client =
-        sdp_client::SdpClient::new(&config).context("Failed to create SDP client")?;
+    let sdp_client = sdp_client::SdpClient::new(&config).context("Failed to create SDP client")?;
 
     tracing::debug!("SDP client initialized");
 

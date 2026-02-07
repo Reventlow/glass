@@ -175,8 +175,7 @@ mod tests {
 
     #[test]
     fn test_create_note_request_serialization() {
-        let req = CreateNoteRequest::new("Test content")
-            .with_show_to_requester(false);
+        let req = CreateNoteRequest::new("Test content").with_show_to_requester(false);
 
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["description"], "Test content");

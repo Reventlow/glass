@@ -13,7 +13,9 @@ use serde::Deserialize;
 
 /// Helper function to trim an optional string.
 fn trim_option(s: &Option<String>) -> Option<String> {
-    s.as_ref().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+    s.as_ref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 /// Input parameters for the list_requests tool.
@@ -420,7 +422,10 @@ mod tests {
         let sanitized = input.sanitize();
         assert_eq!(sanitized.subject, "Test subject");
         assert_eq!(sanitized.description, Some("Description".to_string()));
-        assert_eq!(sanitized.requester_email, Some("user@example.com".to_string()));
+        assert_eq!(
+            sanitized.requester_email,
+            Some("user@example.com".to_string())
+        );
         assert_eq!(sanitized.priority, None); // Whitespace-only becomes None
     }
 

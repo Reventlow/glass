@@ -5,17 +5,17 @@ edition = "2021"
 description = "MCP server for ManageEngine ServiceDesk Plus"
 license = "MIT"
 readme = "README.md"
-repository = "https://github.com/your-org/glass"
-homepage = "https://github.com/your-org/glass"
-documentation = "https://github.com/your-org/glass#readme"
+repository = "https://github.com/Reventlow/glass"
+homepage = "https://github.com/Reventlow/glass"
+documentation = "https://github.com/Reventlow/glass#readme"
 authors = ["FynBus IT <it@fynbus.dk>"]
 keywords = ["mcp", "servicedesk", "manageengine", "itsm", "helpdesk"]
 categories = ["command-line-utilities", "development-tools"]
-rust-version = "1.76"
+rust-version = "1.91"
 
 [dependencies]
 # MCP SDK - official Rust implementation
-rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk", features = [
+rmcp = { git = "https://github.com/modelcontextprotocol/rust-sdk", rev = "8bd3fcb890f87e4b8fb78d029a1c46f58ab16b07", features = [
     "server",
     "transport-io",
     "macros",

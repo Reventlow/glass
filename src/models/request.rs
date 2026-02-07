@@ -152,9 +152,7 @@ where
 impl SdpTimestamp {
     /// Returns the display value if present, otherwise the raw value.
     pub fn display(&self) -> Option<&str> {
-        self.display_value
-            .as_deref()
-            .or(self.value.as_deref())
+        self.display_value.as_deref().or(self.value.as_deref())
     }
 }
 

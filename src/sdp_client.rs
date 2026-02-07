@@ -24,9 +24,10 @@ use reqwest::{Client, Method, StatusCode};
 use crate::config::Config;
 use crate::error::GlassError;
 use crate::models::{
-    AddNoteResponse, Conversation, CreateNoteRequest, GetRequestResponse, ListConversationsResponse,
-    ListInfo, ListNotesResponse, ListRequestsResponse, ListTechniciansResponse, Note, Request,
-    RequestSummary, SearchCriteria, SdpResponse, Technician,
+    AddNoteResponse, Conversation, CreateNoteRequest, GetRequestResponse,
+    ListConversationsResponse, ListInfo, ListNotesResponse, ListRequestsResponse,
+    ListTechniciansResponse, Note, Request, RequestSummary, SdpResponse, SearchCriteria,
+    Technician,
 };
 use crate::tools::{CreateRequestInput, UpdateRequestInput};
 
@@ -127,10 +128,14 @@ impl SdpClient {
     /// A URL string that can be used to view the request in a browser.
     pub fn request_web_url(&self, request_id: &str) -> String {
         // Remove /api/v3 suffix to get the base web URL
-        let web_base = self.base_url
+        let web_base = self
+            .base_url
             .trim_end_matches("/api/v3")
             .trim_end_matches("/api");
-        format!("{}/WorkOrder.do?woMode=viewWO&woID={}", web_base, request_id)
+        format!(
+            "{}/WorkOrder.do?woMode=viewWO&woID={}",
+            web_base, request_id
+        )
     }
 
     /// Tests connectivity to the SDP server.
@@ -146,9 +151,7 @@ impl SdpClient {
         tracing::debug!("Testing connection to SDP server");
 
         // Try to list a single request as a connectivity test
-        let result = self
-            .list_requests(ListParams::new().with_limit(1))
-            .await;
+        let result = self.list_requests(ListParams::new().with_limit(1)).await;
 
         match result {
             Ok(_) => {
@@ -253,7 +256,11 @@ impl SdpClient {
     /// # Type Parameters
     ///
     /// * `T` - The expected response data type
-    async fn get<T>(&self, path: &str, input_data: Option<serde_json::Value>) -> Result<T, GlassError>
+    async fn get<T>(
+        &self,
+        path: &str,
+        input_data: Option<serde_json::Value>,
+    ) -> Result<T, GlassError>
     where
         T: serde::de::DeserializeOwned,
     {
@@ -394,7 +401,9 @@ impl SdpClient {
                 tracing::warn!("Rate limited by SDP server");
                 GlassError::RateLimited { retry_after }
             }
-            StatusCode::BAD_GATEWAY | StatusCode::SERVICE_UNAVAILABLE | StatusCode::GATEWAY_TIMEOUT => {
+            StatusCode::BAD_GATEWAY
+            | StatusCode::SERVICE_UNAVAILABLE
+            | StatusCode::GATEWAY_TIMEOUT => {
                 tracing::warn!(status = %status, "SDP server temporarily unavailable");
                 GlassError::ServiceUnavailable { status }
             }
@@ -421,12 +430,13 @@ impl SdpClient {
     ///     .with_limit(10);
     /// let requests = client.list_requests(params).await?;
     /// ```
-    pub async fn list_requests(&self, params: ListParams) -> Result<Vec<RequestSummary>, GlassError> {
+    pub async fn list_requests(
+        &self,
+        params: ListParams,
+    ) -> Result<Vec<RequestSummary>, GlassError> {
         let input_data = params.to_input_data();
 
-        let response: ListRequestsResponse = self
-            .get("/requests", Some(input_data))
-            .await?;
+        let response: ListRequestsResponse = self.get("/requests", Some(input_data)).await?;
 
         Ok(response.requests)
     }
@@ -454,17 +464,14 @@ impl SdpClient {
     pub async fn get_request(&self, id: &str) -> Result<Request, GlassError> {
         let path = format!("/requests/{}", id);
 
-        let response: GetRequestResponse = self
-            .get(&path, None)
-            .await
-            .map_err(|e| {
-                // Convert generic NotFound to one with the specific ID
-                if matches!(e, GlassError::NotFound { .. }) {
-                    GlassError::NotFound { id: id.to_string() }
-                } else {
-                    e
-                }
-            })?;
+        let response: GetRequestResponse = self.get(&path, None).await.map_err(|e| {
+            // Convert generic NotFound to one with the specific ID
+            if matches!(e, GlassError::NotFound { .. }) {
+                GlassError::NotFound { id: id.to_string() }
+            } else {
+                e
+            }
+        })?;
 
         Ok(response.request)
     }
@@ -522,22 +529,22 @@ impl SdpClient {
     ///     println!("{}: {}", conv.display_from(), conv.display_content());
     /// }
     /// ```
-    pub async fn list_conversations(&self, request_id: &str) -> Result<Vec<Conversation>, GlassError> {
+    pub async fn list_conversations(
+        &self,
+        request_id: &str,
+    ) -> Result<Vec<Conversation>, GlassError> {
         let path = format!("/requests/{}/conversations", request_id);
 
-        let response: ListConversationsResponse = self
-            .get(&path, None)
-            .await
-            .map_err(|e| {
-                // Convert generic NotFound to one with the specific ID
-                if matches!(e, GlassError::NotFound { .. }) {
-                    GlassError::NotFound {
-                        id: request_id.to_string(),
-                    }
-                } else {
-                    e
+        let response: ListConversationsResponse = self.get(&path, None).await.map_err(|e| {
+            // Convert generic NotFound to one with the specific ID
+            if matches!(e, GlassError::NotFound { .. }) {
+                GlassError::NotFound {
+                    id: request_id.to_string(),
                 }
-            })?;
+            } else {
+                e
+            }
+        })?;
 
         Ok(response.conversations)
     }
@@ -552,6 +559,15 @@ impl SdpClient {
     ///
     /// The content as HTML string wrapped in a JSON response.
     pub async fn get_content_from_url(&self, content_url: &str) -> Result<String, GlassError> {
+        let content_url_owned = content_url.to_string();
+        self.with_retry("get_content_from_url", || {
+            self.get_content_from_url_inner(&content_url_owned)
+        })
+        .await
+    }
+
+    /// Inner implementation of content URL fetching (without retry wrapper).
+    async fn get_content_from_url_inner(&self, content_url: &str) -> Result<String, GlassError> {
         // The content_url is a relative path like /api/v3/requests/14992/notifications/88985
         // We need to construct the full URL properly
         let base = self.base_url.trim_end_matches("/api/v3");
@@ -564,62 +580,44 @@ impl SdpClient {
             .header("Accept", SDP_ACCEPT_HEADER)
             .send()
             .await
-            .map_err(GlassError::Http)?;
+            .map_err(|e| {
+                if e.is_timeout() {
+                    return GlassError::Timeout {
+                        duration: Duration::from_secs(DEFAULT_TIMEOUT_SECS),
+                        operation: format!("GET {}", content_url),
+                    };
+                }
+                GlassError::Http(e)
+            })?;
 
         if !response.status().is_success() {
-            return Err(GlassError::HttpStatus {
-                status: response.status(),
-                body: response.text().await.unwrap_or_default(),
-            });
+            return Err(self.handle_http_error(response.status(), response).await);
         }
 
         let body = response.text().await.map_err(GlassError::Http)?;
 
-        // Try to parse as JSON and extract the content
+        // Try to parse as JSON and extract the content.
         // The response structure varies by content type:
         // - Notifications: { "notification": { "description": "..." } }
         // - Conversations: { "conversation": { "description": "..." } }
         // - Notes: { "note": { "description": "..." } }
         if let Ok(json) = serde_json::from_str::<serde_json::Value>(&body) {
-            // Try notification.description first
-            if let Some(content) = json
-                .get("notification")
-                .and_then(|n| n.get("description"))
-                .and_then(|c| c.as_str())
-            {
-                return Ok(content.to_string());
-            }
-            // Also try notification.content
-            if let Some(content) = json
-                .get("notification")
-                .and_then(|n| n.get("content"))
-                .and_then(|c| c.as_str())
-            {
-                return Ok(content.to_string());
-            }
-            // Try conversation.description
-            if let Some(content) = json
-                .get("conversation")
-                .and_then(|n| n.get("description"))
-                .and_then(|c| c.as_str())
-            {
-                return Ok(content.to_string());
-            }
-            // Try note.description
-            if let Some(content) = json
-                .get("note")
-                .and_then(|n| n.get("description"))
-                .and_then(|c| c.as_str())
-            {
-                return Ok(content.to_string());
-            }
-            // Try note.content
-            if let Some(content) = json
-                .get("note")
-                .and_then(|n| n.get("content"))
-                .and_then(|c| c.as_str())
-            {
-                return Ok(content.to_string());
+            // Try each known wrapper and field combination
+            let content_paths: &[(&str, &str)] = &[
+                ("notification", "description"),
+                ("notification", "content"),
+                ("conversation", "description"),
+                ("note", "description"),
+                ("note", "content"),
+            ];
+            for &(wrapper, field) in content_paths {
+                if let Some(content) = json
+                    .get(wrapper)
+                    .and_then(|n| n.get(field))
+                    .and_then(|c| c.as_str())
+                {
+                    return Ok(content.to_string());
+                }
             }
         }
 
@@ -698,10 +696,7 @@ impl SdpClient {
     ///
     /// This method fetches the note list, then fetches each individual note
     /// to get the full content (SDP list endpoint doesn't include content).
-    pub async fn list_notes_with_content(
-        &self,
-        request_id: &str,
-    ) -> Result<Vec<Note>, GlassError> {
+    pub async fn list_notes_with_content(&self, request_id: &str) -> Result<Vec<Note>, GlassError> {
         let notes = self.list_notes(request_id).await?;
 
         // Fetch full details for each note (SDP list endpoint doesn't include content)
@@ -766,7 +761,10 @@ impl SdpClient {
         if let Some(row_count) = limit {
             list_info.insert("row_count".to_string(), serde_json::json!(row_count));
         }
-        input_data.insert("list_info".to_string(), serde_json::Value::Object(list_info));
+        input_data.insert(
+            "list_info".to_string(),
+            serde_json::Value::Object(list_info),
+        );
 
         // Build search_criteria if group filter is provided
         if let Some(group_name) = group {
@@ -831,11 +829,17 @@ impl SdpClient {
         }
 
         if let Some(ref priority) = input.priority {
-            request_data.insert("priority".to_string(), serde_json::json!({"name": priority}));
+            request_data.insert(
+                "priority".to_string(),
+                serde_json::json!({"name": priority}),
+            );
         }
 
         if let Some(ref category) = input.category {
-            request_data.insert("category".to_string(), serde_json::json!({"name": category}));
+            request_data.insert(
+                "category".to_string(),
+                serde_json::json!({"name": category}),
+            );
         }
 
         if let Some(ref subcategory) = input.subcategory {
@@ -892,7 +896,10 @@ impl SdpClient {
         }
 
         if let Some(ref priority) = input.priority {
-            request_data.insert("priority".to_string(), serde_json::json!({"name": priority}));
+            request_data.insert(
+                "priority".to_string(),
+                serde_json::json!({"name": priority}),
+            );
         }
 
         if let Some(ref status) = input.status {
@@ -900,7 +907,10 @@ impl SdpClient {
         }
 
         if let Some(ref category) = input.category {
-            request_data.insert("category".to_string(), serde_json::json!({"name": category}));
+            request_data.insert(
+                "category".to_string(),
+                serde_json::json!({"name": category}),
+            );
         }
 
         if let Some(ref subcategory) = input.subcategory {
@@ -1067,7 +1077,8 @@ impl SdpClient {
     where
         T: serde::de::DeserializeOwned,
     {
-        self.request::<T>(Method::POST, path, Some(input_data)).await
+        self.request::<T>(Method::POST, path, Some(input_data))
+            .await
     }
 
     /// Makes a PUT request to the SDP API.
@@ -1179,6 +1190,32 @@ impl ListParams {
         self
     }
 
+    /// Filters by created time after a date (ISO 8601: YYYY-MM-DD).
+    pub fn with_created_after(mut self, date: impl Into<String>) -> Self {
+        use crate::models::SearchCriterion;
+
+        self.search_criteria.criteria.push(SearchCriterion {
+            field: "created_time".to_string(),
+            condition: "greater than".to_string(),
+            value: serde_json::Value::String(date.into()),
+            logical_operator: None,
+        });
+        self
+    }
+
+    /// Filters by created time before a date (ISO 8601: YYYY-MM-DD).
+    pub fn with_created_before(mut self, date: impl Into<String>) -> Self {
+        use crate::models::SearchCriterion;
+
+        self.search_criteria.criteria.push(SearchCriterion {
+            field: "created_time".to_string(),
+            condition: "less than".to_string(),
+            value: serde_json::Value::String(date.into()),
+            logical_operator: None,
+        });
+        self
+    }
+
     /// Searches by subject (partial match).
     pub fn with_subject_contains(mut self, subject: impl Into<String>) -> Self {
         use crate::models::SearchCriterion;
@@ -1200,16 +1237,26 @@ impl ListParams {
         let mut data = serde_json::Map::new();
 
         // Build list_info object
-        let mut list_info = serde_json::to_value(&self.list_info)
-            .unwrap_or_else(|_| serde_json::json!({}));
+        let mut list_info =
+            serde_json::to_value(&self.list_info).unwrap_or_else(|_| serde_json::json!({}));
 
-        // SDP expects search_criteria INSIDE list_info
+        // SDP expects search_criteria INSIDE list_info.
+        // All criteria except the last need a logical_operator ("AND").
         if !self.search_criteria.is_empty() {
+            let mut criteria = self.search_criteria.criteria.clone();
+            for i in 0..criteria.len().saturating_sub(1) {
+                if criteria[i].logical_operator.is_none() {
+                    criteria[i].logical_operator = Some("AND".to_string());
+                }
+            }
+            // Last criterion should not have a logical_operator
+            if let Some(last) = criteria.last_mut() {
+                last.logical_operator = None;
+            }
             if let serde_json::Value::Object(ref mut map) = list_info {
                 map.insert(
                     "search_criteria".to_string(),
-                    serde_json::to_value(&self.search_criteria.criteria)
-                        .unwrap_or_else(|_| serde_json::json!([])),
+                    serde_json::to_value(&criteria).unwrap_or_else(|_| serde_json::json!([])),
                 );
             }
         }
@@ -1281,9 +1328,7 @@ mod tests {
 
     #[test]
     fn test_list_params_multiple_criteria() {
-        let params = ListParams::new()
-            .with_status("Open")
-            .with_priority("High");
+        let params = ListParams::new().with_status("Open").with_priority("High");
         let input_data = params.to_input_data();
 
         // search_criteria should be inside list_info
