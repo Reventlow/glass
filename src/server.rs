@@ -9,7 +9,7 @@ use rmcp::{
     tool, tool_handler, tool_router, ServerHandler,
 };
 
-use crate::models::{Note, Request, RequestSummary, Technician};
+use crate::models::{Conversation, Note, Request, RequestSummary, Technician};
 use crate::sdp_client::{ListParams, SdpClient};
 use crate::tools::{
     AddNoteInput, AssignRequestInput, CloseRequestInput, CreateRequestInput, GetRequestInput,
@@ -119,7 +119,7 @@ impl GlassServer {
 
     /// Get full details of a single service desk ticket.
     ///
-    /// Returns complete information including description, notes, and history.
+    /// Returns complete information including description, notes, conversations, and history.
     #[tool(description = "Get full details of a single service desk ticket including description, notes, and history.")]
     async fn get_request(
         &self,
@@ -139,18 +139,34 @@ impl GlassServer {
                 format!("Failed to get request {}: {}", input.request_id, sanitized)
             })?;
 
-        // Fetch notes for this request
-        let notes = self
-            .sdp_client
-            .list_notes(&input.request_id)
-            .await
-            .unwrap_or_else(|e| {
-                tracing::warn!(error = %self.sanitize_error(&e), request_id = %input.request_id, "Failed to fetch notes");
-                vec![]
-            });
+        // Fetch notes for this request, including content from content_url
+        let (notes, notes_error) = match self.sdp_client.list_notes_with_content(&input.request_id).await {
+            Ok(n) => (n, None),
+            Err(e) => {
+                let err_msg = self.sanitize_error(&e);
+                tracing::warn!(error = %err_msg, request_id = %input.request_id, "Failed to fetch notes");
+                (vec![], Some(format!("Notes: {}", err_msg)))
+            }
+        };
+
+        // Fetch conversations (email replies) for this request, including content
+        let (conversations, conv_error) = match self.sdp_client.list_conversations_with_content(&input.request_id).await {
+            Ok(c) => (c, None),
+            Err(e) => {
+                let err_msg = self.sanitize_error(&e);
+                tracing::warn!(error = %err_msg, request_id = %input.request_id, "Failed to fetch conversations");
+                (vec![], Some(format!("Conversations: {}", err_msg)))
+            }
+        };
+
+        // Collect any fetch errors
+        let fetch_errors: Vec<String> = [notes_error, conv_error].into_iter().flatten().collect();
+
+        // Get the web URL for this request
+        let web_url = self.sdp_client.request_web_url(&input.request_id);
 
         // Format the response
-        Ok(format_request_details(&request, &notes))
+        Ok(format_request_details(&request, &notes, &conversations, &web_url, &fetch_errors))
     }
 
     /// List technicians available for ticket assignment.
@@ -443,7 +459,7 @@ fn format_request_list(requests: &[RequestSummary]) -> String {
 }
 
 /// Formats full request details as human-readable text.
-fn format_request_details(request: &Request, notes: &[Note]) -> String {
+fn format_request_details(request: &Request, notes: &[Note], conversations: &[Conversation], web_url: &str, fetch_errors: &[String]) -> String {
     let mut output = String::new();
 
     // Header
@@ -454,6 +470,9 @@ fn format_request_details(request: &Request, notes: &[Note]) -> String {
     ));
     output.push_str(&"=".repeat(60));
     output.push('\n');
+
+    // Direct link
+    output.push_str(&format!("\nLink: {}\n", web_url));
 
     // Status information
     output.push_str(&format!("\nStatus: {}\n", request.display_status()));
@@ -504,7 +523,32 @@ fn format_request_details(request: &Request, notes: &[Note]) -> String {
         output.push('\n');
     }
 
-    // Notes section
+    // Show any fetch errors so user knows why notes/conversations might be missing
+    if !fetch_errors.is_empty() {
+        output.push_str("\n--- Fetch Errors ---\n");
+        for err in fetch_errors {
+            output.push_str(&format!("Warning: Failed to fetch {}\n", err));
+        }
+    }
+
+    // Conversations section (email replies - chronological communication)
+    if !conversations.is_empty() {
+        output.push_str("\n--- Conversations ---\n");
+        for conv in conversations {
+            // Conversation header with sender, direction and timestamp
+            let from = conv.display_from();
+            let timestamp = conv.display_time().unwrap_or("Unknown time");
+            let direction = conv.direction();
+            output.push_str(&format!("\n[{}] {} ({})\n", timestamp, from, direction));
+
+            // Conversation content (truncated if needed)
+            let content = conv.display_content();
+            output.push_str(&truncate_text(&content, 1500));
+            output.push('\n');
+        }
+    }
+
+    // Notes section (internal technician notes)
     if !notes.is_empty() {
         output.push_str("\n--- Notes ---\n");
         for note in notes {
@@ -524,7 +568,7 @@ fn format_request_details(request: &Request, notes: &[Note]) -> String {
 
             // Note content (truncated if needed)
             let content = note.display_content();
-            output.push_str(&truncate_text(content, 1000));
+            output.push_str(&truncate_text(&content, 1000));
             output.push('\n');
         }
     }
@@ -1038,6 +1082,7 @@ mod tests {
             }),
             show_to_requester: Some(false),
             notify_technician: Some(true),
+            content_url: None,
         };
 
         let result = format_add_note_result("123", &note);

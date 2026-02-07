@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{NamedEntity, SdpTimestamp};
+use super::{deserialize_string_or_int, NamedEntity, SdpTimestamp};
 
 /// A note attached to a request/ticket.
 ///
@@ -14,18 +14,22 @@ use super::{NamedEntity, SdpTimestamp};
 #[derive(Debug, Clone, Deserialize)]
 pub struct Note {
     /// Unique note ID.
+    #[serde(deserialize_with = "deserialize_string_or_int")]
     pub id: String,
 
     /// Note content (may contain HTML).
-    #[serde(default)]
+    /// SDP may use "description" or "content" for this field.
+    #[serde(default, alias = "content")]
     pub description: Option<String>,
 
     /// Who created the note.
-    #[serde(default)]
+    /// SDP API uses "added_by" for notes.
+    #[serde(default, alias = "added_by")]
     pub created_by: Option<NamedEntity>,
 
     /// When the note was created.
-    #[serde(default)]
+    /// SDP API uses "added_time" for notes.
+    #[serde(default, alias = "added_time")]
     pub created_time: Option<SdpTimestamp>,
 
     /// Whether the note is visible to the requester.
@@ -35,12 +39,25 @@ pub struct Note {
     /// Whether to notify the assigned technician.
     #[serde(default)]
     pub notify_technician: Option<bool>,
+
+    /// URL to fetch the note content.
+    /// SDP sometimes returns content via this URL instead of inline.
+    #[serde(default)]
+    pub content_url: Option<String>,
 }
 
 impl Note {
     /// Returns the note content or a placeholder.
-    pub fn display_content(&self) -> &str {
-        self.description.as_deref().unwrap_or("(No content)")
+    pub fn display_content(&self) -> String {
+        // Try description first (inline content or fetched content)
+        if let Some(desc) = &self.description {
+            return desc.clone();
+        }
+        // If content_url exists but we couldn't fetch, indicate that
+        if self.content_url.is_some() {
+            return "(Content could not be fetched)".to_string();
+        }
+        "(No content)".to_string()
     }
 
     /// Returns who created the note.
@@ -112,6 +129,7 @@ mod tests {
             created_time: None,
             show_to_requester: Some(false),
             notify_technician: None,
+            content_url: None,
         };
         assert_eq!(note.display_content(), "Test note content");
     }
@@ -125,8 +143,23 @@ mod tests {
             created_time: None,
             show_to_requester: None,
             notify_technician: None,
+            content_url: None,
         };
         assert_eq!(note.display_content(), "(No content)");
+    }
+
+    #[test]
+    fn test_note_display_content_with_unfetched_url() {
+        let note = Note {
+            id: "123".to_string(),
+            description: None,
+            created_by: None,
+            created_time: None,
+            show_to_requester: None,
+            notify_technician: None,
+            content_url: Some("/api/v3/requests/123/notes/456".to_string()),
+        };
+        assert_eq!(note.display_content(), "(Content could not be fetched)");
     }
 
     #[test]

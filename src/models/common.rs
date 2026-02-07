@@ -7,6 +7,57 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::GlassError;
 
+/// Deserializes a value that can be either a string or an integer into a String.
+///
+/// SDP API sometimes returns IDs as integers and sometimes as strings,
+/// so this helper handles both cases.
+pub fn deserialize_string_or_int<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::{self, Visitor};
+
+    struct StringOrIntVisitor;
+
+    impl<'de> Visitor<'de> for StringOrIntVisitor {
+        type Value = String;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a string or an integer")
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(value.to_string())
+        }
+
+        fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(value)
+        }
+
+        fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(value.to_string())
+        }
+
+        fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(value.to_string())
+        }
+    }
+
+    deserializer.deserialize_any(StringOrIntVisitor)
+}
+
 /// Pagination and sorting parameters for list operations.
 ///
 /// Used in `input_data` to control the number of results returned

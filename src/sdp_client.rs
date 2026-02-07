@@ -24,9 +24,9 @@ use reqwest::{Client, Method, StatusCode};
 use crate::config::Config;
 use crate::error::GlassError;
 use crate::models::{
-    AddNoteResponse, CreateNoteRequest, GetRequestResponse, ListInfo, ListNotesResponse,
-    ListRequestsResponse, ListTechniciansResponse, Note, Request, RequestSummary, SearchCriteria,
-    SdpResponse, Technician,
+    AddNoteResponse, Conversation, CreateNoteRequest, GetRequestResponse, ListConversationsResponse,
+    ListInfo, ListNotesResponse, ListRequestsResponse, ListTechniciansResponse, Note, Request,
+    RequestSummary, SearchCriteria, SdpResponse, Technician,
 };
 use crate::tools::{CreateRequestInput, UpdateRequestInput};
 
@@ -114,6 +114,23 @@ impl SdpClient {
     /// This should ONLY be used for sanitizing error messages, never for logging.
     pub(crate) fn api_key_for_sanitization(&self) -> &str {
         &self.api_key
+    }
+
+    /// Returns the web URL for viewing a request in the ServiceDesk Plus UI.
+    ///
+    /// # Arguments
+    ///
+    /// * `request_id` - The unique request ID
+    ///
+    /// # Returns
+    ///
+    /// A URL string that can be used to view the request in a browser.
+    pub fn request_web_url(&self, request_id: &str) -> String {
+        // Remove /api/v3 suffix to get the base web URL
+        let web_base = self.base_url
+            .trim_end_matches("/api/v3")
+            .trim_end_matches("/api");
+        format!("{}/WorkOrder.do?woMode=viewWO&woID={}", web_base, request_id)
     }
 
     /// Tests connectivity to the SDP server.
@@ -473,7 +490,42 @@ impl SdpClient {
     pub async fn list_notes(&self, request_id: &str) -> Result<Vec<Note>, GlassError> {
         let path = format!("/requests/{}/notes", request_id);
 
-        let response: ListNotesResponse = self
+        let response: ListNotesResponse = self.get(&path, None).await.map_err(|e| {
+            // Convert generic NotFound to one with the specific ID
+            if matches!(e, GlassError::NotFound { .. }) {
+                GlassError::NotFound {
+                    id: request_id.to_string(),
+                }
+            } else {
+                e
+            }
+        })?;
+
+        Ok(response.notes)
+    }
+
+    /// Gets conversations (email replies) for a request.
+    ///
+    /// # Arguments
+    ///
+    /// * `request_id` - The unique request ID
+    ///
+    /// # Returns
+    ///
+    /// A vector of conversations attached to the request.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let conversations = client.list_conversations("12345").await?;
+    /// for conv in conversations {
+    ///     println!("{}: {}", conv.display_from(), conv.display_content());
+    /// }
+    /// ```
+    pub async fn list_conversations(&self, request_id: &str) -> Result<Vec<Conversation>, GlassError> {
+        let path = format!("/requests/{}/conversations", request_id);
+
+        let response: ListConversationsResponse = self
             .get(&path, None)
             .await
             .map_err(|e| {
@@ -487,7 +539,199 @@ impl SdpClient {
                 }
             })?;
 
-        Ok(response.notes)
+        Ok(response.conversations)
+    }
+
+    /// Gets the content from a content_url.
+    ///
+    /// # Arguments
+    ///
+    /// * `content_url` - The relative URL path to fetch content from
+    ///
+    /// # Returns
+    ///
+    /// The content as HTML string wrapped in a JSON response.
+    pub async fn get_content_from_url(&self, content_url: &str) -> Result<String, GlassError> {
+        // The content_url is a relative path like /api/v3/requests/14992/notifications/88985
+        // We need to construct the full URL properly
+        let base = self.base_url.trim_end_matches("/api/v3");
+        let url = format!("{}{}", base, content_url);
+
+        let response = self
+            .http
+            .get(&url)
+            .header("authtoken", &self.api_key)
+            .header("Accept", SDP_ACCEPT_HEADER)
+            .send()
+            .await
+            .map_err(GlassError::Http)?;
+
+        if !response.status().is_success() {
+            return Err(GlassError::HttpStatus {
+                status: response.status(),
+                body: response.text().await.unwrap_or_default(),
+            });
+        }
+
+        let body = response.text().await.map_err(GlassError::Http)?;
+
+        // Try to parse as JSON and extract the content
+        // The response structure varies by content type:
+        // - Notifications: { "notification": { "description": "..." } }
+        // - Conversations: { "conversation": { "description": "..." } }
+        // - Notes: { "note": { "description": "..." } }
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&body) {
+            // Try notification.description first
+            if let Some(content) = json
+                .get("notification")
+                .and_then(|n| n.get("description"))
+                .and_then(|c| c.as_str())
+            {
+                return Ok(content.to_string());
+            }
+            // Also try notification.content
+            if let Some(content) = json
+                .get("notification")
+                .and_then(|n| n.get("content"))
+                .and_then(|c| c.as_str())
+            {
+                return Ok(content.to_string());
+            }
+            // Try conversation.description
+            if let Some(content) = json
+                .get("conversation")
+                .and_then(|n| n.get("description"))
+                .and_then(|c| c.as_str())
+            {
+                return Ok(content.to_string());
+            }
+            // Try note.description
+            if let Some(content) = json
+                .get("note")
+                .and_then(|n| n.get("description"))
+                .and_then(|c| c.as_str())
+            {
+                return Ok(content.to_string());
+            }
+            // Try note.content
+            if let Some(content) = json
+                .get("note")
+                .and_then(|n| n.get("content"))
+                .and_then(|c| c.as_str())
+            {
+                return Ok(content.to_string());
+            }
+        }
+
+        // If not JSON or unexpected format, return the raw body
+        Ok(body)
+    }
+
+    /// Gets conversations with their content populated.
+    ///
+    /// This is a convenience method that fetches conversations and then
+    /// fetches the content for each one.
+    pub async fn list_conversations_with_content(
+        &self,
+        request_id: &str,
+    ) -> Result<Vec<Conversation>, GlassError> {
+        let mut conversations = self.list_conversations(request_id).await?;
+
+        // Fetch content for each conversation that has a content_url but no description
+        for conv in &mut conversations {
+            if conv.description.is_none() {
+                if let Some(content_url) = &conv.content_url {
+                    match self.get_content_from_url(content_url).await {
+                        Ok(content) => {
+                            conv.description = Some(content);
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                conversation_id = %conv.id,
+                                content_url = %content_url,
+                                error = %e,
+                                "Failed to fetch conversation content"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(conversations)
+    }
+
+    /// Gets a single note by ID.
+    ///
+    /// # Arguments
+    ///
+    /// * `request_id` - The unique request ID
+    /// * `note_id` - The unique note ID
+    ///
+    /// # Returns
+    ///
+    /// The full note details including content.
+    pub async fn get_note(&self, request_id: &str, note_id: &str) -> Result<Note, GlassError> {
+        let path = format!("/requests/{}/notes/{}", request_id, note_id);
+
+        // Make the request and parse the response
+        // The single note endpoint returns { "note": { ... } }
+        #[derive(Debug, serde::Deserialize)]
+        struct GetNoteResponse {
+            note: Note,
+        }
+
+        let response: GetNoteResponse = self.get(&path, None).await.map_err(|e| {
+            if matches!(e, GlassError::NotFound { .. }) {
+                GlassError::NotFound {
+                    id: format!("note {} on request {}", note_id, request_id),
+                }
+            } else {
+                e
+            }
+        })?;
+
+        Ok(response.note)
+    }
+
+    /// Gets notes with their content populated.
+    ///
+    /// This method fetches the note list, then fetches each individual note
+    /// to get the full content (SDP list endpoint doesn't include content).
+    pub async fn list_notes_with_content(
+        &self,
+        request_id: &str,
+    ) -> Result<Vec<Note>, GlassError> {
+        let notes = self.list_notes(request_id).await?;
+
+        // Fetch full details for each note (SDP list endpoint doesn't include content)
+        let mut full_notes = Vec::with_capacity(notes.len());
+        for note in notes {
+            // If the note already has content, keep it as-is
+            if note.description.is_some() {
+                full_notes.push(note);
+                continue;
+            }
+
+            // Fetch the individual note to get content
+            match self.get_note(request_id, &note.id).await {
+                Ok(full_note) => {
+                    full_notes.push(full_note);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        note_id = %note.id,
+                        request_id = %request_id,
+                        error = %e,
+                        "Failed to fetch note content, using partial note"
+                    );
+                    // Fall back to the partial note from the list
+                    full_notes.push(note);
+                }
+            }
+        }
+
+        Ok(full_notes)
     }
 
     /// Lists technicians with optional filtering.

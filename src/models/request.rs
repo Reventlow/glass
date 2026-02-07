@@ -33,13 +33,120 @@ impl NamedEntity {
 /// and a human-readable display_value.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SdpTimestamp {
-    /// Epoch milliseconds.
-    #[serde(default)]
+    /// Epoch milliseconds (can be string or integer in API response).
+    #[serde(default, deserialize_with = "deserialize_optional_string_or_int")]
     pub value: Option<String>,
 
     /// Human-readable format.
     #[serde(default)]
     pub display_value: Option<String>,
+}
+
+/// Deserializes an optional value that can be either a string or an integer into Option<String>.
+fn deserialize_optional_string_or_int<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::{self, Visitor};
+
+    struct OptionalStringOrIntVisitor;
+
+    impl<'de> Visitor<'de> for OptionalStringOrIntVisitor {
+        type Value = Option<String>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("null, a string, or an integer")
+        }
+
+        fn visit_none<E>(self) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(None)
+        }
+
+        fn visit_unit<E>(self) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(None)
+        }
+
+        fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            deserializer.deserialize_any(StringOrIntVisitor).map(Some)
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(Some(value.to_string()))
+        }
+
+        fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(Some(value))
+        }
+
+        fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(Some(value.to_string()))
+        }
+
+        fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(Some(value.to_string()))
+        }
+    }
+
+    struct StringOrIntVisitor;
+
+    impl<'de> Visitor<'de> for StringOrIntVisitor {
+        type Value = String;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a string or an integer")
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(value.to_string())
+        }
+
+        fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(value)
+        }
+
+        fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(value.to_string())
+        }
+
+        fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(value.to_string())
+        }
+    }
+
+    deserializer.deserialize_any(OptionalStringOrIntVisitor)
 }
 
 impl SdpTimestamp {
