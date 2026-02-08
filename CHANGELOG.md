@@ -5,6 +5,25 @@ All notable changes to Glass will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+
+- **Input validation**: All ID parameters (request_id, note_id, technician_id) are now validated as numeric before use in API URLs, preventing path traversal attacks
+- **SSRF protection**: Content URLs from SDP responses are validated against the configured base URL host before fetching
+- **HTTPS enforcement**: A warning is logged when HTTP (non-TLS) base URLs are configured, as the API key would be transmitted in plaintext
+- **Input length limits**: All string inputs are now checked against reasonable maximum lengths (64KB descriptions, 32KB notes, 500 char metadata fields)
+- **URL encoding**: Request IDs are URL-encoded in web URLs to prevent query parameter injection
+- **Error body truncation**: HTTP error response bodies from SDP are truncated to 500 characters to avoid leaking verbose server internals
+- **Private API key field**: The Config struct's api_key field is now private, accessible only via getter method
+
+### Added
+
+- `validate_id()` helper for numeric ID validation in sdp_client
+- `validate()` methods on all tool input structs for length limit enforcement
+- HTML trust boundary documentation on fields that accept HTML content
+- Unit tests for ID validation, input length limits, and URL encoding
+
 ## [0.1.0] - 2026-02-06
 
 Initial release of Glass, an MCP server for ManageEngine ServiceDesk Plus.

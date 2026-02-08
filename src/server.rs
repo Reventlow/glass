@@ -66,8 +66,9 @@ impl GlassServer {
         &self,
         Parameters(input): Parameters<ListRequestsInput>,
     ) -> Result<String, String> {
-        // Sanitize input
+        // Sanitize and validate input
         let input = input.sanitize();
+        input.validate().map_err(|e| e.to_string())?;
         tracing::debug!(?input, "list_requests tool called");
 
         // Build ListParams from input - all filters are applied as search criteria
@@ -125,8 +126,9 @@ impl GlassServer {
         &self,
         Parameters(input): Parameters<GetRequestInput>,
     ) -> Result<String, String> {
-        // Sanitize input
+        // Sanitize and validate input
         let input = input.sanitize();
+        input.validate().map_err(|e| e.to_string())?;
         tracing::debug!(request_id = %input.request_id, "get_request tool called");
 
         let request = self
@@ -193,8 +195,9 @@ impl GlassServer {
         &self,
         Parameters(input): Parameters<ListTechniciansInput>,
     ) -> Result<String, String> {
-        // Sanitize input
+        // Sanitize and validate input
         let input = input.sanitize();
+        input.validate().map_err(|e| e.to_string())?;
         tracing::debug!(?input, "list_technicians tool called");
 
         let technicians = self
@@ -225,20 +228,15 @@ impl GlassServer {
         &self,
         Parameters(input): Parameters<CreateRequestInput>,
     ) -> Result<String, String> {
-        // Sanitize input
+        // Sanitize and validate input
         let input = input.sanitize();
         tracing::debug!(subject = %input.subject, "create_request tool called");
 
-        // Validate subject (already trimmed by sanitize)
+        // Validate subject is non-empty and all fields are within length limits
         if input.subject.is_empty() {
             return Err("Subject is required and cannot be empty.".to_string());
         }
-        if input.subject.len() > 250 {
-            return Err(format!(
-                "Subject exceeds maximum length of 250 characters (got {} characters).",
-                input.subject.len()
-            ));
-        }
+        input.validate().map_err(|e| e.to_string())?;
 
         let request = self.sdp_client.create_request(&input).await.map_err(|e| {
             let sanitized = self.sanitize_error(&e);
@@ -259,7 +257,7 @@ impl GlassServer {
         &self,
         Parameters(input): Parameters<UpdateRequestInput>,
     ) -> Result<String, String> {
-        // Sanitize input
+        // Sanitize and validate input
         let input = input.sanitize();
         tracing::debug!(request_id = %input.request_id, "update_request tool called");
 
@@ -270,18 +268,13 @@ impl GlassServer {
             );
         }
 
-        // Validate subject length if provided (already trimmed by sanitize)
+        // Validate subject is non-empty if provided, and all fields within length limits
         if let Some(ref subject) = input.subject {
             if subject.is_empty() {
                 return Err("Subject cannot be empty.".to_string());
             }
-            if subject.len() > 250 {
-                return Err(format!(
-                    "Subject exceeds maximum length of 250 characters (got {} characters).",
-                    subject.len()
-                ));
-            }
         }
+        input.validate().map_err(|e| e.to_string())?;
 
         let request = self
             .sdp_client
@@ -306,8 +299,9 @@ impl GlassServer {
         &self,
         Parameters(input): Parameters<CloseRequestInput>,
     ) -> Result<String, String> {
-        // Sanitize input
+        // Sanitize and validate input
         let input = input.sanitize();
+        input.validate().map_err(|e| e.to_string())?;
         tracing::debug!(request_id = %input.request_id, "close_request tool called");
 
         let request = self
@@ -337,14 +331,15 @@ impl GlassServer {
         &self,
         Parameters(input): Parameters<AddNoteInput>,
     ) -> Result<String, String> {
-        // Sanitize input
+        // Sanitize and validate input
         let input = input.sanitize();
         tracing::debug!(request_id = %input.request_id, "add_note tool called");
 
-        // Validate content (already trimmed by sanitize)
+        // Validate content is non-empty and all fields within length limits
         if input.content.is_empty() {
             return Err("Note content is required and cannot be empty.".to_string());
         }
+        input.validate().map_err(|e| e.to_string())?;
 
         let note = self
             .sdp_client
@@ -374,8 +369,9 @@ impl GlassServer {
         &self,
         Parameters(input): Parameters<AssignRequestInput>,
     ) -> Result<String, String> {
-        // Sanitize input
+        // Sanitize and validate input
         let input = input.sanitize();
+        input.validate().map_err(|e| e.to_string())?;
         tracing::debug!(request_id = %input.request_id, "assign_request tool called");
 
         // Validate that at least one assignment target is provided
@@ -887,10 +883,10 @@ mod tests {
     }
 
     fn test_config() -> Config {
-        Config {
-            base_url: "https://test.example.com".to_string(),
-            api_key: "test_key_12345".to_string(),
-        }
+        // Set env vars for Config::from_env() since api_key is private
+        std::env::set_var("SDP_BASE_URL", "https://test.example.com");
+        std::env::set_var("SDP_API_KEY", "test_key_12345");
+        Config::from_env().expect("Failed to create test config")
     }
 
     fn test_client() -> SdpClient {

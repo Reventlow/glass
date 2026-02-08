@@ -41,6 +41,9 @@ dotenvy = "0.15"
 # URL encoding for SDP API input_data
 urlencoding = "2"
 
+# URL parsing for SSRF validation
+url = "2"
+
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

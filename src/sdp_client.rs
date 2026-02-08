@@ -20,6 +20,7 @@ use std::future::Future;
 use std::time::Duration;
 
 use reqwest::{Client, Method, StatusCode};
+use url::Url;
 
 use crate::config::Config;
 use crate::error::GlassError;
@@ -45,6 +46,9 @@ const INITIAL_BACKOFF_MS: u64 = 100;
 
 /// Delay before retrying after server error (milliseconds).
 const SERVER_ERROR_DELAY_MS: u64 = 500;
+
+/// Maximum length for HTTP error response bodies to avoid leaking verbose SDP internals.
+const MAX_ERROR_BODY_LEN: usize = 500;
 
 /// HTTP client for ServiceDesk Plus API.
 ///
@@ -94,7 +98,7 @@ impl SdpClient {
         Ok(Self {
             http,
             base_url,
-            api_key: config.api_key.clone(),
+            api_key: config.api_key().to_string(),
         })
     }
 
@@ -117,6 +121,30 @@ impl SdpClient {
         &self.api_key
     }
 
+    /// Validates that an ID is a numeric string, as expected by the SDP API.
+    ///
+    /// SDP uses strictly numeric IDs for all entities. This prevents
+    /// path traversal or injection via malformed IDs interpolated into URLs.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - The ID string to validate
+    /// * `field_name` - Name of the field for error messages (e.g., "request_id")
+    ///
+    /// # Errors
+    ///
+    /// Returns `GlassError::Validation` if the ID is empty or contains non-digit characters.
+    fn validate_id(id: &str, field_name: &str) -> Result<(), GlassError> {
+        if id.is_empty() || !id.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(GlassError::validation(format!(
+                "{} must be a numeric string, got: {:?}",
+                field_name,
+                id.chars().take(50).collect::<String>()
+            )));
+        }
+        Ok(())
+    }
+
     /// Returns the web URL for viewing a request in the ServiceDesk Plus UI.
     ///
     /// # Arguments
@@ -134,7 +162,8 @@ impl SdpClient {
             .trim_end_matches("/api");
         format!(
             "{}/WorkOrder.do?woMode=viewWO&woID={}",
-            web_base, request_id
+            web_base,
+            urlencoding::encode(request_id)
         )
     }
 
@@ -391,6 +420,12 @@ impl SdpClient {
         let body = response.text().await.unwrap_or_default();
         // Sanitize the body to ensure no API key leakage
         let body = GlassError::sanitize_message(&body, &self.api_key);
+        // Truncate to avoid leaking verbose SDP internals
+        let body = if body.len() > MAX_ERROR_BODY_LEN {
+            format!("{}...[truncated]", &body[..MAX_ERROR_BODY_LEN])
+        } else {
+            body
+        };
 
         match status {
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => GlassError::Authentication,
@@ -462,6 +497,7 @@ impl SdpClient {
     /// println!("Subject: {}", request.display_subject());
     /// ```
     pub async fn get_request(&self, id: &str) -> Result<Request, GlassError> {
+        Self::validate_id(id, "request_id")?;
         let path = format!("/requests/{}", id);
 
         let response: GetRequestResponse = self.get(&path, None).await.map_err(|e| {
@@ -495,6 +531,7 @@ impl SdpClient {
     /// }
     /// ```
     pub async fn list_notes(&self, request_id: &str) -> Result<Vec<Note>, GlassError> {
+        Self::validate_id(request_id, "request_id")?;
         let path = format!("/requests/{}/notes", request_id);
 
         let response: ListNotesResponse = self.get(&path, None).await.map_err(|e| {
@@ -533,6 +570,7 @@ impl SdpClient {
         &self,
         request_id: &str,
     ) -> Result<Vec<Conversation>, GlassError> {
+        Self::validate_id(request_id, "request_id")?;
         let path = format!("/requests/{}/conversations", request_id);
 
         let response: ListConversationsResponse = self.get(&path, None).await.map_err(|e| {
@@ -567,11 +605,29 @@ impl SdpClient {
     }
 
     /// Inner implementation of content URL fetching (without retry wrapper).
+    ///
+    /// Validates that the constructed URL stays on the same host as the
+    /// configured base URL to prevent SSRF attacks via crafted content_url values.
     async fn get_content_from_url_inner(&self, content_url: &str) -> Result<String, GlassError> {
         // The content_url is a relative path like /api/v3/requests/14992/notifications/88985
         // We need to construct the full URL properly
         let base = self.base_url.trim_end_matches("/api/v3");
         let url = format!("{}{}", base, content_url);
+
+        // SSRF protection: validate the constructed URL's host matches the configured base URL
+        let parsed_url = Url::parse(&url).map_err(|e| {
+            GlassError::validation(format!("invalid content URL: {}", e))
+        })?;
+        let base_parsed = Url::parse(base).map_err(|e| {
+            GlassError::validation(format!("invalid base URL: {}", e))
+        })?;
+        if parsed_url.host() != base_parsed.host() {
+            return Err(GlassError::validation(format!(
+                "content URL host mismatch: expected {:?}, got {:?}",
+                base_parsed.host(),
+                parsed_url.host()
+            )));
+        }
 
         let response = self
             .http
@@ -670,6 +726,8 @@ impl SdpClient {
     ///
     /// The full note details including content.
     pub async fn get_note(&self, request_id: &str, note_id: &str) -> Result<Note, GlassError> {
+        Self::validate_id(request_id, "request_id")?;
+        Self::validate_id(note_id, "note_id")?;
         let path = format!("/requests/{}/notes/{}", request_id, note_id);
 
         // Make the request and parse the response
@@ -885,6 +943,7 @@ impl SdpClient {
         id: &str,
         input: &UpdateRequestInput,
     ) -> Result<Request, GlassError> {
+        Self::validate_id(id, "request_id")?;
         let mut request_data = serde_json::Map::new();
 
         if let Some(ref subject) = input.subject {
@@ -955,6 +1014,7 @@ impl SdpClient {
         closure_code: Option<&str>,
         comments: Option<&str>,
     ) -> Result<Request, GlassError> {
+        Self::validate_id(id, "request_id")?;
         let mut request_data = serde_json::Map::new();
 
         // Build closure_info
@@ -1007,6 +1067,7 @@ impl SdpClient {
         show_to_requester: Option<bool>,
         notify_technician: Option<bool>,
     ) -> Result<Note, GlassError> {
+        Self::validate_id(request_id, "request_id")?;
         let note_request = CreateNoteRequest::new(content);
 
         let note_request = if let Some(show) = show_to_requester {
@@ -1048,6 +1109,10 @@ impl SdpClient {
         technician_id: Option<&str>,
         group: Option<&str>,
     ) -> Result<Request, GlassError> {
+        Self::validate_id(id, "request_id")?;
+        if let Some(tech_id) = technician_id {
+            Self::validate_id(tech_id, "technician_id")?;
+        }
         let mut request_data = serde_json::Map::new();
 
         if let Some(tech_id) = technician_id {
@@ -1340,5 +1405,50 @@ mod tests {
         // Both criteria should be present
         assert_eq!(arr[0].get("field").unwrap(), "status.name");
         assert_eq!(arr[1].get("field").unwrap(), "priority.name");
+    }
+
+    #[test]
+    fn test_validate_id_valid() {
+        assert!(SdpClient::validate_id("12345", "test").is_ok());
+        assert!(SdpClient::validate_id("0", "test").is_ok());
+        assert!(SdpClient::validate_id("999999999", "test").is_ok());
+    }
+
+    #[test]
+    fn test_validate_id_rejects_empty() {
+        let err = SdpClient::validate_id("", "request_id").unwrap_err();
+        assert!(err.to_string().contains("request_id"));
+        assert!(err.to_string().contains("numeric"));
+    }
+
+    #[test]
+    fn test_validate_id_rejects_non_numeric() {
+        assert!(SdpClient::validate_id("abc", "id").is_err());
+        assert!(SdpClient::validate_id("123abc", "id").is_err());
+        assert!(SdpClient::validate_id("12/34", "id").is_err());
+        assert!(SdpClient::validate_id("../etc/passwd", "id").is_err());
+        assert!(SdpClient::validate_id("12 34", "id").is_err());
+        assert!(SdpClient::validate_id("-1", "id").is_err());
+    }
+
+    /// Creates an SdpClient for unit tests without requiring Config/env vars.
+    fn test_client() -> SdpClient {
+        SdpClient {
+            http: Client::new(),
+            base_url: "https://example.com/api/v3".to_string(),
+            api_key: "test_key".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_request_web_url_encodes_id() {
+        let client = test_client();
+        let url = client.request_web_url("12345");
+        assert!(url.contains("woID=12345"));
+
+        // Verify special characters are encoded
+        let url = client.request_web_url("123&evil=true");
+        assert!(!url.contains("&evil=true"));
+        assert!(url.contains("woID=123%26evil%3Dtrue"));
     }
 }

@@ -7,9 +7,57 @@
 //!
 //! All input structs implement `sanitize()` which trims whitespace
 //! from string fields. This should be called before processing input.
+//!
+//! # Input Validation
+//!
+//! Write operation input structs implement `validate()` which checks
+//! field length limits after sanitization. Call `validate()` after
+//! `sanitize()` and before processing.
 
+use crate::error::GlassError;
 use rmcp::schemars::{self, JsonSchema};
 use serde::Deserialize;
+
+// ============================================================================
+// Field length limits
+// ============================================================================
+
+/// Maximum length for `description` fields (64 KB).
+const MAX_DESCRIPTION_LEN: usize = 65_536;
+/// Maximum length for note `content` fields (32 KB).
+const MAX_CONTENT_LEN: usize = 32_768;
+/// Maximum length for `closure_comments` (8 KB).
+const MAX_CLOSURE_COMMENTS_LEN: usize = 8_192;
+/// Maximum length for `subject` fields.
+const MAX_SUBJECT_LEN: usize = 250;
+/// Maximum length for short string fields (category, group, etc.).
+const MAX_SHORT_FIELD_LEN: usize = 500;
+
+/// Checks that a required string field does not exceed `max_len` characters.
+/// Returns a `GlassError::Validation` if the limit is exceeded.
+fn check_len(field_name: &str, value: &str, max_len: usize) -> Result<(), GlassError> {
+    if value.len() > max_len {
+        return Err(GlassError::validation(format!(
+            "{} exceeds maximum length of {} characters (got {} characters)",
+            field_name,
+            max_len,
+            value.len()
+        )));
+    }
+    Ok(())
+}
+
+/// Checks that an optional string field does not exceed `max_len` characters.
+fn check_option_len(
+    field_name: &str,
+    value: &Option<String>,
+    max_len: usize,
+) -> Result<(), GlassError> {
+    if let Some(v) = value {
+        check_len(field_name, v, max_len)?;
+    }
+    Ok(())
+}
 
 /// Helper function to trim an optional string.
 fn trim_option(s: &Option<String>) -> Option<String> {
@@ -76,6 +124,17 @@ impl ListRequestsInput {
             offset: self.offset,
         }
     }
+
+    /// Validates field lengths. Call after `sanitize()`.
+    pub fn validate(&self) -> Result<(), GlassError> {
+        check_option_len("status", &self.status, MAX_SHORT_FIELD_LEN)?;
+        check_option_len("priority", &self.priority, MAX_SHORT_FIELD_LEN)?;
+        check_option_len("technician", &self.technician, MAX_SHORT_FIELD_LEN)?;
+        check_option_len("requester", &self.requester, MAX_SHORT_FIELD_LEN)?;
+        check_option_len("created_after", &self.created_after, MAX_SHORT_FIELD_LEN)?;
+        check_option_len("created_before", &self.created_before, MAX_SHORT_FIELD_LEN)?;
+        Ok(())
+    }
 }
 
 /// Input parameters for the get_request tool.
@@ -92,6 +151,12 @@ impl GetRequestInput {
         Self {
             request_id: self.request_id.trim().to_string(),
         }
+    }
+
+    /// Validates field lengths. Call after `sanitize()`.
+    pub fn validate(&self) -> Result<(), GlassError> {
+        check_len("request_id", &self.request_id, MAX_SHORT_FIELD_LEN)?;
+        Ok(())
     }
 }
 
@@ -118,6 +183,12 @@ impl ListTechniciansInput {
             limit: self.limit,
         }
     }
+
+    /// Validates field lengths. Call after `sanitize()`.
+    pub fn validate(&self) -> Result<(), GlassError> {
+        check_option_len("group", &self.group, MAX_SHORT_FIELD_LEN)?;
+        Ok(())
+    }
 }
 
 // ============================================================================
@@ -133,6 +204,9 @@ pub struct CreateRequestInput {
     pub subject: String,
 
     /// Detailed description of the issue or request (supports HTML).
+    ///
+    /// SECURITY: HTML content is passed through to SDP without sanitization.
+    /// SDP is responsible for sanitizing HTML on render.
     #[serde(default)]
     pub description: Option<String>,
 
@@ -181,6 +255,20 @@ impl CreateRequestInput {
             technician_id: trim_option(&self.technician_id),
         }
     }
+
+    /// Validates field lengths. Call after `sanitize()`.
+    pub fn validate(&self) -> Result<(), GlassError> {
+        check_len("subject", &self.subject, MAX_SUBJECT_LEN)?;
+        check_option_len("description", &self.description, MAX_DESCRIPTION_LEN)?;
+        check_option_len("requester_email", &self.requester_email, MAX_SHORT_FIELD_LEN)?;
+        check_option_len("priority", &self.priority, MAX_SHORT_FIELD_LEN)?;
+        check_option_len("category", &self.category, MAX_SHORT_FIELD_LEN)?;
+        check_option_len("subcategory", &self.subcategory, MAX_SHORT_FIELD_LEN)?;
+        check_option_len("item", &self.item, MAX_SHORT_FIELD_LEN)?;
+        check_option_len("group", &self.group, MAX_SHORT_FIELD_LEN)?;
+        check_option_len("technician_id", &self.technician_id, MAX_SHORT_FIELD_LEN)?;
+        Ok(())
+    }
 }
 
 /// Input parameters for the update_request tool.
@@ -196,6 +284,9 @@ pub struct UpdateRequestInput {
     pub subject: Option<String>,
 
     /// Updated description (supports HTML).
+    ///
+    /// SECURITY: HTML content is passed through to SDP without sanitization.
+    /// SDP is responsible for sanitizing HTML on render.
     #[serde(default)]
     pub description: Option<String>,
 
@@ -252,6 +343,20 @@ impl UpdateRequestInput {
             technician_id: trim_option(&self.technician_id),
         }
     }
+
+    /// Validates field lengths. Call after `sanitize()`.
+    pub fn validate(&self) -> Result<(), GlassError> {
+        check_len("request_id", &self.request_id, MAX_SHORT_FIELD_LEN)?;
+        check_option_len("subject", &self.subject, MAX_SUBJECT_LEN)?;
+        check_option_len("description", &self.description, MAX_DESCRIPTION_LEN)?;
+        check_option_len("priority", &self.priority, MAX_SHORT_FIELD_LEN)?;
+        check_option_len("status", &self.status, MAX_SHORT_FIELD_LEN)?;
+        check_option_len("category", &self.category, MAX_SHORT_FIELD_LEN)?;
+        check_option_len("subcategory", &self.subcategory, MAX_SHORT_FIELD_LEN)?;
+        check_option_len("group", &self.group, MAX_SHORT_FIELD_LEN)?;
+        check_option_len("technician_id", &self.technician_id, MAX_SHORT_FIELD_LEN)?;
+        Ok(())
+    }
 }
 
 /// Input parameters for the close_request tool.
@@ -281,6 +386,14 @@ impl CloseRequestInput {
             closure_comments: trim_option(&self.closure_comments),
         }
     }
+
+    /// Validates field lengths. Call after `sanitize()`.
+    pub fn validate(&self) -> Result<(), GlassError> {
+        check_len("request_id", &self.request_id, MAX_SHORT_FIELD_LEN)?;
+        check_option_len("closure_code", &self.closure_code, MAX_SHORT_FIELD_LEN)?;
+        check_option_len("closure_comments", &self.closure_comments, MAX_CLOSURE_COMMENTS_LEN)?;
+        Ok(())
+    }
 }
 
 /// Input parameters for the add_note tool.
@@ -292,6 +405,9 @@ pub struct AddNoteInput {
     pub request_id: String,
 
     /// The note content (supports HTML formatting).
+    ///
+    /// SECURITY: HTML content is passed through to SDP without sanitization.
+    /// SDP is responsible for sanitizing HTML on render.
     pub content: String,
 
     /// If true, the note will be visible to the requester. Default: false (internal note).
@@ -313,6 +429,13 @@ impl AddNoteInput {
             show_to_requester: self.show_to_requester,
             notify_technician: self.notify_technician,
         }
+    }
+
+    /// Validates field lengths. Call after `sanitize()`.
+    pub fn validate(&self) -> Result<(), GlassError> {
+        check_len("request_id", &self.request_id, MAX_SHORT_FIELD_LEN)?;
+        check_len("content", &self.content, MAX_CONTENT_LEN)?;
+        Ok(())
     }
 }
 
@@ -347,6 +470,14 @@ impl AssignRequestInput {
             technician_id: trim_option(&self.technician_id),
             group: trim_option(&self.group),
         }
+    }
+
+    /// Validates field lengths. Call after `sanitize()`.
+    pub fn validate(&self) -> Result<(), GlassError> {
+        check_len("request_id", &self.request_id, MAX_SHORT_FIELD_LEN)?;
+        check_option_len("technician_id", &self.technician_id, MAX_SHORT_FIELD_LEN)?;
+        check_option_len("group", &self.group, MAX_SHORT_FIELD_LEN)?;
+        Ok(())
     }
 }
 
@@ -563,5 +694,130 @@ mod tests {
         let json = r#"{"request_id": "123", "group": "IT Support"}"#;
         let input: AssignRequestInput = serde_json::from_str(json).unwrap();
         assert!(input.has_assignment());
+    }
+
+    // ========================================================================
+    // Validation tests
+    // ========================================================================
+
+    #[test]
+    fn test_create_request_validate_ok() {
+        let input = CreateRequestInput {
+            subject: "Valid subject".to_string(),
+            description: Some("A description".to_string()),
+            requester_email: None,
+            priority: Some("High".to_string()),
+            category: None,
+            subcategory: None,
+            item: None,
+            group: None,
+            technician_id: None,
+        };
+        assert!(input.validate().is_ok());
+    }
+
+    #[test]
+    fn test_create_request_validate_subject_too_long() {
+        let input = CreateRequestInput {
+            subject: "x".repeat(251),
+            description: None,
+            requester_email: None,
+            priority: None,
+            category: None,
+            subcategory: None,
+            item: None,
+            group: None,
+            technician_id: None,
+        };
+        let err = input.validate().unwrap_err();
+        assert!(err.to_string().contains("subject"));
+        assert!(err.to_string().contains("250"));
+    }
+
+    #[test]
+    fn test_create_request_validate_description_too_long() {
+        let input = CreateRequestInput {
+            subject: "OK subject".to_string(),
+            description: Some("x".repeat(65_537)),
+            requester_email: None,
+            priority: None,
+            category: None,
+            subcategory: None,
+            item: None,
+            group: None,
+            technician_id: None,
+        };
+        let err = input.validate().unwrap_err();
+        assert!(err.to_string().contains("description"));
+        assert!(err.to_string().contains("65536"));
+    }
+
+    #[test]
+    fn test_add_note_validate_content_too_long() {
+        let input = AddNoteInput {
+            request_id: "123".to_string(),
+            content: "x".repeat(32_769),
+            show_to_requester: None,
+            notify_technician: None,
+        };
+        let err = input.validate().unwrap_err();
+        assert!(err.to_string().contains("content"));
+        assert!(err.to_string().contains("32768"));
+    }
+
+    #[test]
+    fn test_close_request_validate_comments_too_long() {
+        let input = CloseRequestInput {
+            request_id: "123".to_string(),
+            closure_code: None,
+            closure_comments: Some("x".repeat(8_193)),
+        };
+        let err = input.validate().unwrap_err();
+        assert!(err.to_string().contains("closure_comments"));
+        assert!(err.to_string().contains("8192"));
+    }
+
+    #[test]
+    fn test_list_requests_validate_short_field_too_long() {
+        let input = ListRequestsInput {
+            status: Some("x".repeat(501)),
+            priority: None,
+            technician: None,
+            requester: None,
+            open_only: None,
+            created_after: None,
+            created_before: None,
+            limit: None,
+            offset: None,
+        };
+        let err = input.validate().unwrap_err();
+        assert!(err.to_string().contains("status"));
+        assert!(err.to_string().contains("500"));
+    }
+
+    #[test]
+    fn test_update_request_validate_ok() {
+        let input = UpdateRequestInput {
+            request_id: "123".to_string(),
+            subject: Some("Updated".to_string()),
+            description: None,
+            priority: None,
+            status: None,
+            category: None,
+            subcategory: None,
+            group: None,
+            technician_id: None,
+        };
+        assert!(input.validate().is_ok());
+    }
+
+    #[test]
+    fn test_assign_request_validate_ok() {
+        let input = AssignRequestInput {
+            request_id: "123".to_string(),
+            technician_id: Some("456".to_string()),
+            group: None,
+        };
+        assert!(input.validate().is_ok());
     }
 }

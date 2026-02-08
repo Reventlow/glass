@@ -154,6 +154,20 @@ Non-transient errors (authentication failures, validation errors, not found) are
 - The API key is **never logged** at any log level
 - Error messages are sanitized to remove any API key occurrences
 - The key is stored only in memory, loaded from environment variables
+- The API key field is private and accessible only via getter method
+
+### Input Validation
+
+- All ID parameters (request_id, note_id, technician_id) are validated as numeric before use in API URLs
+- String inputs are checked against maximum length limits (64KB descriptions, 32KB notes, 500 char metadata fields)
+- Content URLs from SDP responses are validated against the configured host before fetching (SSRF protection)
+- HTML content in notes and descriptions is passed through to SDP, which is responsible for sanitizing on render
+
+### Transport Security
+
+- Glass warns at startup if `SDP_BASE_URL` uses HTTP instead of HTTPS
+- API key is sent via HTTP header (not URL query parameters)
+- HTTP error responses from SDP are truncated to prevent leaking server internals
 
 ### Best Practices
 

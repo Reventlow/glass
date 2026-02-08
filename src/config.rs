@@ -17,7 +17,8 @@ pub struct Config {
 
     /// Technician API key for authentication.
     /// This value must never be logged or included in error messages.
-    pub api_key: String,
+    /// Accessed via the `api_key()` getter for security.
+    api_key: String,
 }
 
 impl Config {
@@ -52,6 +53,14 @@ impl Config {
         Ok(Config { base_url, api_key })
     }
 
+    /// Returns a reference to the API key.
+    ///
+    /// The API key field is private to prevent accidental exposure.
+    /// Use this getter when the key is needed (e.g., for HTTP headers).
+    pub fn api_key(&self) -> &str {
+        &self.api_key
+    }
+
     /// Gets a required environment variable, returning an error if missing or empty.
     fn get_required_env(name: &str) -> Result<String, GlassError> {
         env::var(name)
@@ -77,6 +86,13 @@ impl Config {
             return Err(GlassError::invalid_config(
                 "SDP_BASE_URL must start with http:// or https://",
             ));
+        }
+
+        // Warn if using plain HTTP - API key will be sent in plaintext
+        if url.starts_with("http://") {
+            tracing::warn!(
+                "SDP_BASE_URL uses HTTP - API key will be transmitted in plaintext. Use HTTPS in production."
+            );
         }
 
         Ok(url)
