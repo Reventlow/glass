@@ -615,12 +615,10 @@ impl SdpClient {
         let url = format!("{}{}", base, content_url);
 
         // SSRF protection: validate the constructed URL's host matches the configured base URL
-        let parsed_url = Url::parse(&url).map_err(|e| {
-            GlassError::validation(format!("invalid content URL: {}", e))
-        })?;
-        let base_parsed = Url::parse(base).map_err(|e| {
-            GlassError::validation(format!("invalid base URL: {}", e))
-        })?;
+        let parsed_url = Url::parse(&url)
+            .map_err(|e| GlassError::validation(format!("invalid content URL: {}", e)))?;
+        let base_parsed = Url::parse(base)
+            .map_err(|e| GlassError::validation(format!("invalid base URL: {}", e)))?;
         if parsed_url.host() != base_parsed.host() {
             return Err(GlassError::validation(format!(
                 "content URL host mismatch: expected {:?}, got {:?}",

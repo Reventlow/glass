@@ -260,7 +260,11 @@ impl CreateRequestInput {
     pub fn validate(&self) -> Result<(), GlassError> {
         check_len("subject", &self.subject, MAX_SUBJECT_LEN)?;
         check_option_len("description", &self.description, MAX_DESCRIPTION_LEN)?;
-        check_option_len("requester_email", &self.requester_email, MAX_SHORT_FIELD_LEN)?;
+        check_option_len(
+            "requester_email",
+            &self.requester_email,
+            MAX_SHORT_FIELD_LEN,
+        )?;
         check_option_len("priority", &self.priority, MAX_SHORT_FIELD_LEN)?;
         check_option_len("category", &self.category, MAX_SHORT_FIELD_LEN)?;
         check_option_len("subcategory", &self.subcategory, MAX_SHORT_FIELD_LEN)?;
@@ -391,7 +395,11 @@ impl CloseRequestInput {
     pub fn validate(&self) -> Result<(), GlassError> {
         check_len("request_id", &self.request_id, MAX_SHORT_FIELD_LEN)?;
         check_option_len("closure_code", &self.closure_code, MAX_SHORT_FIELD_LEN)?;
-        check_option_len("closure_comments", &self.closure_comments, MAX_CLOSURE_COMMENTS_LEN)?;
+        check_option_len(
+            "closure_comments",
+            &self.closure_comments,
+            MAX_CLOSURE_COMMENTS_LEN,
+        )?;
         Ok(())
     }
 }
